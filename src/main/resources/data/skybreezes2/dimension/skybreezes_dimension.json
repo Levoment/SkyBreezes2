@@ -1,0 +1,12 @@
+{
+  "type": "skybreezes2:skybreezes_dimension_type",
+  "generator": {
+    "type": "skybreezes2:sky_breezes_chunk_generator",
+    "settings": {
+      "biome": "skybreezes2:skybreezes_default_biome",
+      "layers": [],
+      "structure_overrides": [],
+      "features": true
+    }
+  }
+}
