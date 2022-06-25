@@ -2,11 +2,10 @@
   "type": "skybreezes2:skybreezes_dimension_type",
   "generator": {
     "type": "skybreezes2:sky_breezes_chunk_generator",
-    "settings": {
-      "biome": "skybreezes2:skybreezes_default_biome",
-      "layers": [],
-      "structure_overrides": [],
-      "features": true
+    "settings": "skybreezes2:sky_breeze_chunk_generator_settings",
+    "biome_source": {
+      "type": "minecraft:fixed",
+      "biome": "skybreezes2:skybreezes_default_biome"
     }
   }
 }
