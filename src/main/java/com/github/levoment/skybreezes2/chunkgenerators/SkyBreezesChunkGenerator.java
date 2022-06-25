@@ -1,55 +1,88 @@
 package com.github.levoment.skybreezes2.chunkgenerators;
 
+import com.github.levoment.skybreezes2.mixin.ChunkNoiseSamplerAccessor;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
+import net.minecraft.block.BlockState;
+import net.minecraft.block.Blocks;
 import net.minecraft.structure.StructureSet;
+import net.minecraft.util.Util;
+import net.minecraft.util.dynamic.RegistryOps;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.ChunkPos;
+import net.minecraft.util.math.noise.DoublePerlinNoiseSampler;
+import net.minecraft.util.math.random.CheckedRandom;
+import net.minecraft.util.math.random.ChunkRandom;
+import net.minecraft.util.math.random.RandomSeed;
 import net.minecraft.util.registry.Registry;
+import net.minecraft.util.registry.RegistryEntry;
 import net.minecraft.world.ChunkRegion;
 import net.minecraft.world.HeightLimitView;
 import net.minecraft.world.Heightmap;
+import net.minecraft.world.SpawnHelper;
+import net.minecraft.world.biome.Biome;
 import net.minecraft.world.biome.source.BiomeAccess;
+import net.minecraft.world.biome.source.BiomeSource;
+import net.minecraft.world.biome.source.BiomeSupplier;
+import net.minecraft.world.chunk.BelowZeroRetrogen;
 import net.minecraft.world.chunk.Chunk;
 import net.minecraft.world.gen.GenerationStep;
 import net.minecraft.world.gen.StructureAccessor;
-import net.minecraft.world.gen.chunk.*;
+import net.minecraft.world.gen.StructureWeightSampler;
+import net.minecraft.world.gen.chunk.AquiferSampler;
+import net.minecraft.world.gen.chunk.Blender;
+import net.minecraft.world.gen.chunk.ChunkGenerator;
+import net.minecraft.world.gen.chunk.ChunkGeneratorSettings;
+import net.minecraft.world.gen.chunk.ChunkNoiseSampler;
+import net.minecraft.world.gen.chunk.VerticalBlockSample;
 import net.minecraft.world.gen.noise.NoiseConfig;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 
-public class SkyBreezesChunkGenerator extends FlatChunkGenerator {
+public class SkyBreezesChunkGenerator extends ChunkGenerator {
 
-    public static final Codec<SkyBreezesChunkGenerator> CODEC =
-            RecordCodecBuilder.create(
-                    skyBreezesChunkGeneratorInstance -> {
-                        return createStructureSetRegistryGetter(skyBreezesChunkGeneratorInstance)
-                                .and(
-                                        FlatChunkGeneratorConfig.CODEC.fieldOf("settings").forGetter(skyBreezesChunkGenerator -> skyBreezesChunkGenerator.getConfig())
-                                )
-                                .apply
-                                        (
-                                                skyBreezesChunkGeneratorInstance, skyBreezesChunkGeneratorInstance.stable(SkyBreezesChunkGenerator::new)
-                                        );
-                    }
-            );
+    public static final Codec<SkyBreezesChunkGenerator> CODEC = RecordCodecBuilder.create(instance ->
+            SkyBreezesChunkGenerator.createStructureSetRegistryGetter(instance).and(instance.group(
+                    RegistryOps.createRegistryCodec(Registry.NOISE_KEY).forGetter(generator -> generator.noiseRegistry),
+                    (BiomeSource.CODEC.fieldOf("biome_source")).forGetter(generator -> generator.biomeSource),
+                    (ChunkGeneratorSettings.REGISTRY_CODEC.fieldOf("settings")).forGetter(generator -> generator.settings))
+            ).apply(instance, instance.stable(SkyBreezesChunkGenerator::new)));
 
-    private FlatChunkGeneratorConfig config;
+    private final Registry<DoublePerlinNoiseSampler.NoiseParameters> noiseRegistry;
+    protected final RegistryEntry<ChunkGeneratorSettings> settings;
+    private final AquiferSampler.FluidLevelSampler fluidLevelSampler;
 
-    public SkyBreezesChunkGenerator(Registry<StructureSet> structureSetRegistry, FlatChunkGeneratorConfig config) {
-        super(structureSetRegistry, config);
-        this.config = config;
-    }
-
-    @Override
-    public FlatChunkGeneratorConfig getConfig() {
-        return this.config;
+    public SkyBreezesChunkGenerator(Registry<StructureSet> structureSetRegistry, Registry<DoublePerlinNoiseSampler.NoiseParameters> noiseRegistry, BiomeSource populationSource, RegistryEntry<ChunkGeneratorSettings> registryEntry) {
+        super(structureSetRegistry, Optional.empty(), populationSource);
+        this.noiseRegistry = noiseRegistry;
+        this.settings = registryEntry;
+        this.fluidLevelSampler = (x, y, z) -> new AquiferSampler.FluidLevel(-1000000, Blocks.AIR.getDefaultState());
     }
 
     @Override
     protected Codec<? extends ChunkGenerator> getCodec() {
         return CODEC;
+    }
+
+    @Override
+    public CompletableFuture<Chunk> populateBiomes(Registry<Biome> biomeRegistry, Executor executor, NoiseConfig noiseConfig, Blender blender, StructureAccessor structureAccessor, Chunk chunk) {
+        return CompletableFuture.supplyAsync(Util.debugSupplier("init_biomes", () -> {
+            this.populateBiomes(blender, noiseConfig, structureAccessor, chunk);
+            return chunk;
+        }), Util.getMainWorkerExecutor());
+    }
+
+    private void populateBiomes(Blender blender, NoiseConfig noiseConfig, StructureAccessor structureAccessor, Chunk chunk2) {
+        ChunkNoiseSampler chunkNoiseSampler = chunk2.getOrCreateChunkNoiseSampler(chunk -> this.method_41537(chunk, structureAccessor, blender, noiseConfig));
+        BiomeSupplier biomeSupplier = BelowZeroRetrogen.getBiomeSupplier(blender.getBiomeSupplier(this.biomeSource), chunk2);
+        chunk2.populateBiomes(biomeSupplier, ((ChunkNoiseSamplerAccessor)chunkNoiseSampler).callCreateMultiNoiseSampler(noiseConfig.getNoiseRouter(), this.settings.value().spawnTarget()));
+    }
+
+    private ChunkNoiseSampler method_41537(Chunk chunk, StructureAccessor structureAccessor, Blender blender, NoiseConfig noiseConfig) {
+        return ChunkNoiseSampler.create(chunk, noiseConfig, StructureWeightSampler.method_42695(structureAccessor, chunk.getPos()), this.settings.value(), this.fluidLevelSampler, blender);
     }
 
     @Override
@@ -60,16 +93,6 @@ public class SkyBreezesChunkGenerator extends FlatChunkGenerator {
     @Override
     public void buildSurface(ChunkRegion region, StructureAccessor structures, NoiseConfig noiseConfig, Chunk chunk) {
 
-    }
-
-    @Override
-    public void populateEntities(ChunkRegion region) {
-
-    }
-
-    @Override
-    public int getWorldHeight() {
-        return 0;
     }
 
     @Override
@@ -245,13 +268,28 @@ public class SkyBreezesChunkGenerator extends FlatChunkGenerator {
     }
 
     @Override
+    public VerticalBlockSample getColumnSample(int x, int z, HeightLimitView world, NoiseConfig noiseConfig) {
+        return new VerticalBlockSample(this.getMinimumY(), new BlockState[0]); // Never pass null. Will crash everyone and vanilla too.
+    }
+
+    @Override
+    public void getDebugHudText(List<String> text, NoiseConfig noiseConfig, BlockPos pos) {
+
+    }
+
+    @Override
+    public int getWorldHeight() {
+        return this.settings.value().generationShapeConfig().height();
+    }
+
+    @Override
     public int getSeaLevel() {
-        return 0;
+        return this.settings.value().seaLevel();
     }
 
     @Override
     public int getMinimumY() {
-        return 0;
+        return this.settings.value().generationShapeConfig().minimumY();
     }
 
     @Override
@@ -260,12 +298,14 @@ public class SkyBreezesChunkGenerator extends FlatChunkGenerator {
     }
 
     @Override
-    public VerticalBlockSample getColumnSample(int x, int z, HeightLimitView world, NoiseConfig noiseConfig) {
-        return null;
-    }
-
-    @Override
-    public void getDebugHudText(List<String> text, NoiseConfig noiseConfig, BlockPos pos) {
-
+    public void populateEntities(ChunkRegion region) {
+        if (this.settings.value().mobGenerationDisabled()) {
+            return;
+        }
+        ChunkPos chunkPos = region.getCenterPos();
+        RegistryEntry<Biome> registryEntry = region.getBiome(chunkPos.getStartPos().withY(region.getTopY() - 1));
+        ChunkRandom chunkRandom = new ChunkRandom(new CheckedRandom(RandomSeed.getSeed()));
+        chunkRandom.setPopulationSeed(region.getSeed(), chunkPos.getStartX(), chunkPos.getStartZ());
+        SpawnHelper.populateEntities(region, registryEntry, chunkPos, chunkRandom);
     }
 }
